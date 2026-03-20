@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Pikselowa Precyzja v12.1 - Filter Edition</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; margin: 10px; background-color: #f0f2f5; font-size: 13px; }
+        .container { max-width: 100%; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); height: 95vh; display: flex; flex-direction: column; }
+        
+        /* Dashboard - TERAZ KLIKALNY */
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) 200px; gap: 10px; margin-bottom: 15px; background: #fff; padding: 15px; border-bottom: 3px solid #1a73e8; flex-shrink: 0; }
+        .stat { padding: 8px 15px; border-radius: 6px; font-weight: bold; border: 2px solid #ddd; text-align: center; font-size: 12px; cursor: pointer; transition: 0.2s; user-select: none; }
+        .stat:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .stat:active { transform: translateY(0); }
+        .stat.active-filter { border-color: #333; border-width: 3px; }
+
+        .stat.total { background: #fff; color: #333; }
+        .stat.ok { background: #d4edda; color: #155724; }
+        .stat.err { background: #f8d7da; color: #721c24; }
+        .stat.drift { background: #f3e5f5; color: #4b0082; }
+
+        /* Reszta stylów bez zmian */
+        .editor-section { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; flex-shrink: 0; }
+        textarea { width: 100%; height: 80px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; font-family: monospace; font-size: 11px; resize: none; box-sizing: border-box; }
+        .comparison-header { display: grid; grid-template-columns: 60px 1fr 1fr; background: #2c3e50; color: white; font-weight: bold; padding: 10px 0; border-radius: 8px 8px 0 0; flex-shrink: 0; }
+        .comparison-header div { padding-left: 15px; }
+        .comparison-scroll { overflow-y: scroll; border: 2px solid #2c3e50; background: #fff; flex-grow: 1; border-radius: 0 0 8px 8px; }
+        .row-grid { display: grid; grid-template-columns: 60px 1fr 1fr; border-bottom: 1px solid #eee; min-height: 30px; align-items: stretch; }
+        .cell-num { background: #f1f3f4; border-right: 1px solid #ddd; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #666; font-family: monospace; }
+        .cell-content { padding: 6px 15px; white-space: pre-wrap; word-break: break-all; font-family: 'Consolas', monospace; position: relative; font-size: 12px; }
+        .cell-pl { border-left: 1px solid #eee; }
+
+        .status-ok { background-color: #f6ffed; }
+        .status-error { background-color: #fff1f0; }
+        .status-drift { background-color: #f9f0ff; }
+        
+        .btn { padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; color: white; }
+        .btn-run { background: #1a73e8; }
+        .btn-next { background: #fd7e14; }
+        .verify-btn { position: absolute; right: 5px; top: 5px; font-size: 9px; background: rgba(26,115,232,0.1); color: #1a73e8; border: 1px solid #1a73e8; padding: 1px 3px; text-decoration: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1 style="text-align:center; color:#1a73e8; margin: 5px 0;">🦓 Pikselowa Precyzja v12.1</h1>
+
+    <div class="dashboard">
+        <div class="stat total active-filter" onclick="filterData('all', this)">Razem: <span id="totalLines">0</span></div>
+        <div class="stat ok" onclick="filterData('status-ok', this)">Zgodne: <span id="okLines">0</span></div>
+        <div class="stat err" onclick="filterData('status-error', this)">⚠️ Błędy Techniczne: <span id="errLines">0</span></div>
+        <div class="stat drift" onclick="filterData('status-drift', this)">🟣 Wykryty Drift: <span id="driftLines">0</span></div>
+        <button class="btn btn-next" onclick="jumpToNextIssue()">NASTĘPNY PROBLEM 🚀</button>
+    </div>
+
+    <div class="editor-section">
+        <textarea id="engInput" placeholder="Wklej oryginał (ENG)..."></textarea>
+        <textarea id="plInput" placeholder="Wklej tłumaczenie (PL)..."></textarea>
+    </div>
+
+    <button class="btn btn-run" style="width:100%; margin-bottom:10px;" onclick="startAnalysis()">URUCHOM ANALIZĘ</button>
+
+    <div class="comparison-header">
+        <div>LINIA</div>
+        <div>ORYGINAŁ (ENG)</div>
+        <div>TŁUMACZENIE (PL)</div>
+    </div>
+    <div class="comparison-scroll">
+        <div id="gridContainer"></div>
+    </div>
+</div>
+
+<script>
+    let issueList = [];
+    let currentIssueIdx = -1;
+
+    function startAnalysis() {
+        const engText = document.getElementById('engInput').value;
+        const plText = document.getElementById('plInput').value;
+        const engLines = engText.split(/\r?\n/);
+        const plLines = plText.split(/\r?\n/);
+        const max = Math.max(engLines.length, plLines.length);
+
+        const container = document.getElementById('gridContainer');
+        container.innerHTML = '';
+        issueList = [];
+        let stats = { ok: 0, err: 0, drift: 0 };
+
+        for (let i = 0; i < max; i++) {
+            const eng = engLines[i] || "";
+            const pl = plLines[i] || "";
+            let statusClass = "status-ok";
+
+            const engVars = (eng.match(/\{[0-9]\}/g) || []).length;
+            const plVars = (pl.match(/\{[0-9]\}/g) || []).length;
+            const engTags = (eng.match(/[\[\]]/g) || []).length;
+            const plTags = (pl.match(/[\[\]]/g) || []).length;
+
+            if (eng !== "" && pl !== "") {
+                if (engVars !== plVars || engTags !== plTags) {
+                    statusClass = "status-error";
+                    stats.err++;
+                    issueList.push(i);
+                } else if (eng === pl && eng.length > 3) {
+                    statusClass = "status-drift";
+                    stats.drift++;
+                    issueList.push(i);
+                } else {
+                    stats.ok++;
+                }
+            }
+            container.appendChild(renderRow(i, eng, pl, statusClass));
+        }
+
+        document.getElementById('totalLines').innerText = max;
+        document.getElementById('okLines').innerText = stats.ok;
+        document.getElementById('errLines').innerText = stats.err;
+        document.getElementById('driftLines').innerText = stats.drift;
+    }
+
+    // --- NOWA FUNKCJA FILTROWANIA ---
+    function filterData(filterType, element) {
+        const rows = document.querySelectorAll('.row-grid');
+        
+        // Aktualizacja wyglądu przycisków
+        document.querySelectorAll('.stat').forEach(s => s.classList.remove('active-filter'));
+        element.classList.add('active-filter');
+
+        rows.forEach(row => {
+            if (filterType === 'all') {
+                row.style.display = 'grid';
+            } else {
+                if (row.classList.contains(filterType)) {
+                    row.style.display = 'grid';
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+        });
+    }
+
+    function renderRow(idx, eng, pl, status) {
+        const row = document.createElement('div');
+        row.className = `row-grid ${status}`;
+        row.id = `row-${idx}`;
+        row.innerHTML = `
+            <div class="cell-num">${idx + 1}</div>
+            <div class="cell-content">${escapeHtml(eng)}<a class="verify-btn" href="https://translate.google.com/?sl=en&tl=pl&text=${encodeURIComponent(eng)}&op=translate" target="_blank">VERIFY</a></div>
+            <div class="cell-content cell-pl">${escapeHtml(pl)}</div>
+        `;
+        return row;
+    }
+
+    function escapeHtml(text) {
+        return text ? text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : "---";
+    }
+
+    function jumpToNextIssue() {
+        if (issueList.length === 0) return;
+        // Reset filtra przy skakaniu do problemu, żeby na pewno widzieć wynik
+        filterData('all', document.querySelector('.stat.total'));
+        
+        currentIssueIdx = (currentIssueIdx + 1) % issueList.length;
+        const target = document.getElementById(`row-${issueList[currentIssueIdx]}`);
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.style.outline = "3px solid #1a73e8";
+        setTimeout(() => target.style.outline = "none", 2000);
+    }
+</script>
+</body>
+</html>
